@@ -1,0 +1,577 @@
+--- a/xc/lib/Xaw3d/AsciiSrc.c
++++ b/xc/lib/Xaw3d/AsciiSrc.c
+@@ -51,11 +51,17 @@
+ #include <X11/Xaw3d/MultiSrcP.h> 
+ #endif
+ 
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <fcntl.h>
+ 
+ #if (defined(ASCII_STRING) || defined(ASCII_DISK))
+ #  include <X11/Xaw3d/AsciiText.h> /* for Widget Classes. */
+ #endif
+ 
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <fcntl.h>
+ 
+ /****************************************************************
+  *
+@@ -1007,7 +1013,9 @@
+ AsciiSrcObject src;
+ Boolean newString;
+ {
+-    char * open_mode = NULL;
++    mode_t open_mode = 0;
++    const char *fdopen_mode = NULL;
++    int fd;
+     FILE * file;
+     char fileName[TMPSIZ];
+ 
+@@ -1049,7 +1057,8 @@
+ 	    XtErrorMsg("NoFile", "asciiSourceCreate", "XawError",
+ 		     "Creating a read only disk widget and no file specified.",
+ 		       NULL, 0);
+-	open_mode = "r";
++	open_mode = O_RDONLY;
++	fdopen_mode = "r";
+ 	break;
+     case XawtextAppend:
+     case XawtextEdit:
+@@ -1057,9 +1066,17 @@
+ 	    src->ascii_src.string = fileName;
+ 	    (void) tmpnam(src->ascii_src.string);
+ 	    src->ascii_src.is_tempfile = TRUE;
+-	    open_mode = "w";
+-	} else
+-	    open_mode = "r+";
++	    open_mode = O_WRONLY | O_CREAT | O_EXCL;
++	    fdopen_mode = "w";
++	} else {
++/* O_NOFOLLOW is a BSD & Linux extension */
++#ifdef O_NOFOLLOW
++		open_mode = O_RDWR | O_NOFOLLOW;
++#else
++		open_mode = O_RDWR; /* unsafe; subject to race conditions */
++#endif
++		fdopen_mode = "r+";
++	}
+ 	break;
+     default:
+ 	XtErrorMsg("badMode", "asciiSourceCreate", "XawError",
+@@ -1078,11 +1095,14 @@
+     }
+     
+     if (!src->ascii_src.is_tempfile) {
+-	if ((file = fopen(src->ascii_src.string, open_mode)) != 0) {
+-	    (void) fseek(file, (Off_t)0, 2);
+-	    src->ascii_src.length = (XawTextPosition) ftell(file);
+-	    return file;
+-	} else {
++	if ((fd = open(src->ascii_src.string, open_mode, 0666))) {
++	    if ((file = fdopen(fd, fdopen_mode)) != NULL) {
++		    (void)fseek(file, 0, SEEK_END);
++		    src->ascii_src.length = (XawTextPosition)ftell(file);
++		    return (file);
++	    }
++	}
++	{	    
+ 	    String params[2];
+ 	    Cardinal num_params = 2;
+ 	    
+@@ -1094,7 +1114,7 @@
+ 	}
+     } 
+     src->ascii_src.length = 0;
+-    return((FILE *)NULL);
++    return(NULL);
+ }
+ 
+ static void
+--- a/xc/lib/Xaw3d/AsciiSrcP.h
++++ b/xc/lib/Xaw3d/AsciiSrcP.h
+@@ -85,7 +85,11 @@
+ #ifdef L_tmpnam
+ #define TMPSIZ L_tmpnam
+ #else
+-#define TMPSIZ 32		/* bytes to allocate for tmpnam */
++#ifdef PATH_MAX
++#define TMPSIZ PATH_MAX
++#else
++#define TMPSIZ 1024		/* bytes to allocate for tmpnam */
++#endif
+ #endif
+ 
+ #define MAGIC_VALUE ((XawTextPosition) -1) /* Magic value. */
+--- a/xc/lib/Xaw3d/MenuButton.c
++++ b/xc/lib/Xaw3d/MenuButton.c
+@@ -53,6 +53,8 @@
+ #include <X11/Xaw3d/XawInit.h>
+ #include <X11/Xaw3d/MenuButtoP.h>
+ 
++#include "XawAlloc.h"
++
+ static void ClassInitialize();
+ static void PopupMenu();
+ 
+@@ -179,9 +181,16 @@
+ 
+   if (menu == NULL) {
+     char error_buf[BUFSIZ];
+-    (void) sprintf(error_buf, "MenuButton: %s %s.",
+-	    "Could not find menu widget named", mbw->menu_button.menu_name);
+-    XtAppWarning(XtWidgetToApplicationContext(w), error_buf);
++    char *err1 = "MenuButton: Could not find menu widget named ";
++    char *perr;
++    int len;
++
++    len = strlen(err1) + strlen(mbw->menu_button.menu_name) + 1 + 1;
++    perr = XtStackAlloc(len, error_buf);
++    if (perr == NULL) return;
++    sprintf(perr, "%s%s.", err1, mbw->menu_button.menu_name);
++    XtAppWarning(XtWidgetToApplicationContext(w), perr);
++    XtStackFree(perr, error_buf);
+     return;
+   }
+   if (!XtIsRealized(menu))
+--- a/xc/lib/Xaw3d/MultiSrc.c
++++ b/xc/lib/Xaw3d/MultiSrc.c
+@@ -74,6 +74,9 @@
+ #include <stdio.h>
+ #include <ctype.h>
+ #include <errno.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <fcntl.h>
+ 
+ /****************************************************************
+  *
+@@ -1076,7 +1079,9 @@
+     MultiSrcObject src;
+     Boolean newString;
+ {
+-    char * open_mode = NULL;
++    mode_t open_mode = 0;
++    const char *fdopen_mode = NULL;
++    int fd;
+     FILE * file;
+     char fileName[TMPSIZ];
+     Display *d = XtDisplayOfObject((Widget)src);
+@@ -1127,7 +1132,8 @@
+ 	    XtErrorMsg("NoFile", "multiSourceCreate", "XawError",
+ 		     "Creating a read only disk widget and no file specified.",
+ 		       NULL, 0);
+-	open_mode = "r";
++	open_mode = O_RDONLY;
++	fdopen_mode = "r";
+ 	break;
+     case XawtextAppend:
+     case XawtextEdit:
+@@ -1140,9 +1146,17 @@
+ 
+ 	    (void) tmpnam(src->multi_src.string);
+ 	    src->multi_src.is_tempfile = TRUE;
+-	    open_mode = "w";
+-	} else
+-	    open_mode = "r+";
++	    open_mode = O_WRONLY | O_CREAT | O_EXCL;
++	    fdopen_mode = "w";
++	} else {
++/* O_NOFOLLOW is a BSD & Linux extension */
++#ifdef O_NOFOLLOW 
++		open_mode = O_RDWR | O_NOFOLLOW;
++#else
++		open_mode = O_RDWR; /* unsafe; subject to race conditions */
++#endif
++		fdopen_mode = "r+";
++	}
+ 	break;
+     default:
+ 	XtErrorMsg("badMode", "multiSourceCreate", "XawError",
+@@ -1161,11 +1175,14 @@
+     }
+     
+     if (!src->multi_src.is_tempfile) {
+-	if ((file = fopen(src->multi_src.string, open_mode)) != 0) {
+-	    (void) fseek(file, (Off_t)0, 2);
+-            src->multi_src.length = ftell (file);
+-	    return file;
+-	} else {
++	if ((fd = open(src->multi_src.string, open_mode, 0666))) {
++		if ((file = fdopen(fd, fdopen_mode)) != NULL) {
++			(void)fseek(file, 0, SEEK_END);
++			src->multi_src.length = (XawTextPosition)ftell(file);
++			return (file);
++		}
++	}
++	{
+ 	    String params[2];
+ 	    Cardinal num_params = 2;
+ 	    
+@@ -1177,7 +1194,7 @@
+ 	}
+     } 
+     src->multi_src.length = 0;
+-    return((FILE *)NULL);
++    return(NULL);
+ #undef StrLen
+ }
+ 
+--- a/xc/lib/Xaw3d/MultiSrcP.h
++++ b/xc/lib/Xaw3d/MultiSrcP.h
+@@ -113,7 +113,11 @@
+ #ifdef L_tmpnam
+ #define TMPSIZ L_tmpnam
+ #else
+-#define TMPSIZ 32		/* bytes to allocate for tmpnam */
++#ifdef PATH_MAX
++#define TMPSIZ PATH_MAX
++#else
++#define TMPSIZ 1024		/* bytes to allocate for tmpnam */
++#endif
+ #endif
+ 
+ #define MAGIC_VALUE ((XawTextPosition) -1) /* Magic value. */
+--- a/xc/lib/Xaw3d/Scrollbar.c
++++ b/xc/lib/Xaw3d/Scrollbar.c
+@@ -1049,6 +1049,7 @@
+     if (!event->xmotion.same_screen) return;
+ 
+     ExtractPosition (event, &x, &y);
++    
+     loc = FractionLoc (sbw, x, y);
+     t = sbw->scrollbar.top;
+     s = sbw->scrollbar.shown;
+--- a/xc/lib/Xaw3d/Simple.c
++++ b/xc/lib/Xaw3d/Simple.c
+@@ -56,6 +56,8 @@
+ #include <X11/Xaw3d/SimpleP.h>
+ #include <X11/Xmu/Drawing.h>
+ 
++#include "XawAlloc.h"
++
+ #define offset(field) XtOffsetOf(SimpleRec, simple.field)
+ 
+ static XtResource resources[] = {
+@@ -148,11 +150,17 @@
+ 
+     if (c->simple_class.change_sensitive == NULL) {
+ 	char buf[BUFSIZ];
+-
+-	(void) sprintf(buf,
+-		"%s Widget: The Simple Widget class method 'change_sensitive' is undefined.\nA function must be defined or inherited.",
+-		c->core_class.class_name);
+-	XtWarning(buf);
++	char *pbuf;
++	char *msg1 = " Widget: The Simple Widget class method 'change_sensitive' is undefined.\nA function must be defined or inherited.";
++	int len;
++
++	len = strlen(msg1) + strlen(c->core_class.class_name) + 1;
++	pbuf = XtStackAlloc(len, buf);
++	if (pbuf != NULL) {
++	    sprintf(pbuf, "%s%s", c->core_class.class_name, msg1);
++	    XtWarning(pbuf);
++	    XtStackFree(pbuf, buf);
++	}
+ 	c->simple_class.change_sensitive = ChangeSensitive;
+     }
+ 
+--- a/xc/lib/Xaw3d/SimpleMenu.c
++++ b/xc/lib/Xaw3d/SimpleMenu.c
+@@ -51,6 +51,8 @@
+ #include <X11/Xmu/Initer.h>
+ #include <X11/Xmu/CharSet.h>
+ 
++#include "XawAlloc.h"
++
+ #define streq(a, b)        ( strcmp((a), (b)) == 0 )
+ 
+ #define offset(field) XtOffsetOf(SimpleMenuRec, simple_menu.field)
+@@ -755,9 +757,17 @@
+ 
+   if ( (menu = FindMenu(w, params[0])) == NULL) {
+     char error_buf[BUFSIZ];
+-    (void) sprintf(error_buf, "%s '%s'",
+-	    "Xaw - SimpleMenuWidget: could not find menu named: ", params[0]);
+-    XtAppWarning(XtWidgetToApplicationContext(w), error_buf);
++    char *err1 = "Xaw - SimpleMenuWidget: could not find menu named: ";
++    char *perr;
++    int len;
++
++    len = strlen(err1) + strlen(params[0]) + 2 + 1;
++    perr = XtStackAlloc(len, error_buf);
++    if (perr == NULL)
++	return;
++    sprintf(perr, "%s'%s'", err1, params[0]);
++    XtAppWarning(XtWidgetToApplicationContext(w), perr);
++    XtStackFree(perr, error_buf);
+     return;
+   }
+   
+--- a/xc/lib/Xaw3d/StripChart.c
++++ b/xc/lib/Xaw3d/StripChart.c
+@@ -315,7 +315,15 @@
+        if (w->strip_chart.points != NULL) {
+ 	   w->strip_chart.points[0].x = w->strip_chart.interval + s;
+ 	   XDrawPoints(XtDisplay(w), XtWindow(w), w->strip_chart.hiGC,
+-		       w->strip_chart.points, w->strip_chart.scale,
++		/*
++		 * patch:
++		 *
++		 *     w->strip_chart.points, w->strip_chart.scale,
++		 * 
++		 * this to avoid a subdle bug of extra spurios scan
++		 * line in this widget.
++		 */
++		       w->strip_chart.points, w->strip_chart.scale - 1, 
+ 		       CoordModePrevious);
+        }
+ 
+--- a/xc/lib/Xaw3d/Text.c
++++ b/xc/lib/Xaw3d/Text.c
+@@ -75,6 +75,8 @@
+ #include <X11/Xfuncs.h>
+ #include <ctype.h>		/* for isprint() */
+ 
++#include "XawAlloc.h"
++
+ #ifndef MAX_LEN_CT
+ #define MAX_LEN_CT 6		/* for sequence: ESC $ ( A \xx \xx */
+ #endif
+@@ -520,6 +522,8 @@
+   TextWidget ctx = (TextWidget) new;
+   char error_buf[BUFSIZ];
+   int s;
++  char *perr; /* frankie */
++  size_t len; /* frankie */
+ 
+   ctx->text.threeD = XtVaCreateWidget("threeD", threeDWidgetClass, new,
+                                  XtNx, 0, XtNy, 0,
+@@ -568,10 +572,17 @@
+   if (ctx->text.scroll_vert != XawtextScrollNever) 
+     if ( (ctx->text.resize == XawtextResizeHeight) ||
+      	 (ctx->text.resize == XawtextResizeBoth) ) {
+-      (void) sprintf(error_buf, "Xaw Text Widget %s:\n %s %s.", ctx->core.name,
+-	      "Vertical scrolling not allowed with height resize.\n",
+-	      "Vertical scrolling has been DEACTIVATED.");
+-      XtAppWarning(XtWidgetToApplicationContext(new), error_buf);
++      char *err1 = "Xaw Text Widget ";
++      char *err2 = ":\nVertical scrolling not allowed with height resize.\n";
++      char *err3 = "Vertical scrolling has been DEACTIVATED.";
++      len = strlen(err1) + strlen(err2) + strlen(err3) +
++		strlen(ctx->core.name) + 1;
++      perr = XtStackAlloc(len, error_buf);
++      if (perr != NULL) {
++	(void) sprintf(perr, "%s%s%s%s", err1, ctx->core.name, err2, err3);
++	XtAppWarning(XtWidgetToApplicationContext(new), perr);
++	XtStackFree(perr, error_buf);
++      }
+       ctx->text.scroll_vert = XawtextScrollNever;
+     }
+     else if (ctx->text.scroll_vert == XawtextScrollAlways)
+@@ -579,18 +590,32 @@
+ 
+   if (ctx->text.scroll_horiz != XawtextScrollNever) 
+     if (ctx->text.wrap != XawtextWrapNever) {
+-      (void) sprintf(error_buf, "Xaw Text Widget %s:\n %s %s.", ctx->core.name,
+-	      "Horizontal scrolling not allowed with wrapping active.\n",
+-	      "Horizontal scrolling has been DEACTIVATED.");
+-      XtAppWarning(XtWidgetToApplicationContext(new), error_buf);
++      char *err1 = "Xaw Text Widget ";
++      char *err2 = ":\nHorizontal scrolling not allowed with wrapping active.";
++      char *err3 = "\nHorizontal scrolling has been DEACTIVATED.";
++      len = strlen(err1) + strlen(err2) + strlen(err3) +
++		strlen(ctx->core.name) + 1;
++      perr = XtStackAlloc(len, error_buf);
++      if (perr != NULL) {
++	(void) sprintf(perr, "%s%s%s%s", err1, ctx->core.name, err2, err3);
++	XtAppWarning(XtWidgetToApplicationContext(new), perr);
++	XtStackFree(perr, error_buf);
++      }
+       ctx->text.scroll_horiz = XawtextScrollNever;
+     }
+     else if ( (ctx->text.resize == XawtextResizeWidth) ||
+ 	      (ctx->text.resize == XawtextResizeBoth) ) {
+-      (void) sprintf(error_buf, "Xaw Text Widget %s:\n %s %s.", ctx->core.name,
+-	      "Horizontal scrolling not allowed with width resize.\n",
+-	      "Horizontal scrolling has been DEACTIVATED.");
+-      XtAppWarning(XtWidgetToApplicationContext(new), error_buf);
++      char *err1 = "Xaw Text Widget ";
++      char *err2 = ":\nHorizontal scrolling not allowed with width resize.\n";
++      char *err3 = "Horizontal scrolling has been DEACTIVATED.";
++      len = strlen(err1) + strlen(err2) + strlen(err3) +
++		strlen(ctx->core.name) + 1;
++      perr = XtStackAlloc(len, error_buf);
++      if (perr != NULL) {
++	(void) sprintf(perr, "%s%s%s%s", err1, ctx->core.name, err2, err3);
++	XtAppWarning(XtWidgetToApplicationContext(new), perr);
++	XtStackFree(perr, error_buf);
++      }
+       ctx->text.scroll_horiz = XawtextScrollNever;
+     }
+     else if (ctx->text.scroll_horiz == XawtextScrollAlways)
+--- a/xc/lib/Xaw3d/TextPop.c
++++ b/xc/lib/Xaw3d/TextPop.c
+@@ -66,6 +66,8 @@
+ #include <X11/Xos.h>		/* for O_RDONLY */
+ #include <errno.h>
+ 
++#include "XawAlloc.h"
++
+ #ifdef X_NOT_STDC_ENV
+ extern int errno;
+ #endif
+@@ -809,6 +811,8 @@
+ struct SearchAndReplace * search;
+ {
+   char msg[BUFSIZ];
++  char *pmsg;
++  int len;
+   Widget tw = XtParent(search->search_popup);
+   XawTextPosition pos;
+   XawTextScanDirection dir;
+@@ -835,9 +839,20 @@
+    /* The Raw string in find.ptr may be WC I can't use here, so I re - call 
+    GetString to get a tame version. */
+ 
+-  if (pos == XawTextSearchError) 
+-    (void) sprintf( msg, "Could not find string ``%s''.", GetString( search->search_text ) );
+-  else {
++  if (pos == XawTextSearchError) {
++    char *msg1 = "Could not find string ``";
++    char *msg2 = "''.";
++    len = strlen(msg1) + strlen(msg2) +
++		strlen(GetString( search->search_text )) + 1;
++    pmsg = XtStackAlloc(len, msg);
++    if (pmsg != NULL) {
++      (void) sprintf( pmsg, "%s%s%s", msg1, GetString( search->search_text ),
++			msg2);
++    } else {
++      pmsg = msg;
++      (void) sprintf( pmsg, "Could not find string");
++    }
++  } else {
+     if (dir == XawsdRight)
+       XawTextSetInsertionPoint( tw, pos + text.length);
+     else
+@@ -849,7 +864,8 @@
+   }
+   
+   XawTextUnsetSelection(tw);
+-  SetSearchLabels(search, msg, "", TRUE);
++  SetSearchLabels(search, pmsg, "", TRUE);
++  XtStackFree(pmsg, msg);
+   return(FALSE);
+ }
+ 
+@@ -982,13 +998,26 @@
+       if ( (new_pos == XawTextSearchError) ) {
+ 	if (count == 0) {
+ 	  char msg[BUFSIZ];
++	  char *pmsg;
++	  int len;
++	  char *msg1 = "*** Error: Could not find string ``";
++	  char *msg2 = "''. ***";
+ 
+              /* The Raw string in find.ptr may be WC I can't use here, 
+ 		so I call GetString to get a tame version.*/
+ 
+-	  (void) sprintf( msg, "%s %s %s", "*** Error: Could not find string ``",
+-		  GetString( search->search_text ), "''. ***");
+-	  SetSearchLabels(search, msg, "", TRUE);
++	  len = strlen(msg1) + strlen(msg2) +
++		strlen(GetString( search->search_text )) + 1;
++	  pmsg = XtStackAlloc(len, msg);
++	  if (pmsg != NULL) {
++	    (void) sprintf( pmsg, "%s%s%s", msg1,
++				GetString( search->search_text ), msg2);
++	  } else {
++	    pmsg = msg;
++	    (void) sprintf(pmsg, "*** Error: Could not find string ***");
++	  }
++	  SetSearchLabels(search, pmsg, "", TRUE);
++	  XtStackFree(pmsg, msg);
+ 	  return(FALSE);
+ 	}
+ 	else
+@@ -1011,9 +1040,22 @@
+ 
+     if (XawTextReplace(tw, pos, end_pos, &replace) != XawEditDone) {
+       char msg[BUFSIZ];
+-      
+-      (void) sprintf( msg, "'%s' with '%s'. ***", find.ptr, replace.ptr);
++      char *pmsg;
++      int len;
++      char *msg1 = "' with '";
++      char *msg2 = "'. ***";
++
++      len = 1 + strlen(msg1) + strlen(msg2) + strlen(find.ptr) +
++		strlen(replace.ptr) + 1;
++      pmsg = XtStackAlloc(len, msg);
++      if (pmsg != NULL) {
++	(void) sprintf( pmsg, "`%s%s%s%s", find.ptr, msg1, replace.ptr, msg2);
++      } else {
++	pmsg = msg;
++	(void) sprintf(pmsg, "string ***");
++      }
+       SetSearchLabels(search, "*** Error while replacing", msg, TRUE);
++      XtStackFree(pmsg, msg);
+       return(FALSE);
+     }      
+ 
+@@ -1164,13 +1206,20 @@
+ {
+   Widget temp_widget;
+   char buf[BUFSIZ];
++  char *pbuf;
++  int len;
+ 
+-  (void) sprintf(buf, "%s.%s", FORM_NAME, name);
++  len = strlen(FORM_NAME) + strlen(name) + 2;
++  pbuf = XtStackAlloc(len, buf);
++  if (pbuf == NULL) return FALSE;
++  (void) sprintf(pbuf, "%s.%s", FORM_NAME, name);
+ 
+-  if ( (temp_widget = XtNameToWidget(shell, buf)) != NULL) {
++  if ( (temp_widget = XtNameToWidget(shell, pbuf)) != NULL) {
+     SetResource(temp_widget, res_name, value);
++    XtStackFree(pbuf, buf);
+     return(TRUE);
+   }
++  XtStackFree(pbuf, buf);
+   return(FALSE);
+ }
+ 
+--- /dev/null
++++ b/xc/lib/Xaw3d/XawAlloc.h
+@@ -0,0 +1,10 @@
++/* $XFree86: xc/lib/Xaw/XawAlloc.h,v 1.1.2.1 1998/05/16 09:05:23 dawes Exp $ */
++
++#define XtStackAlloc(size, stack_cache_array)     \
++    ((size) <= sizeof(stack_cache_array)          \
++    ?  (XtPointer)(stack_cache_array)             \
++    :  XtMalloc((unsigned)(size)))
++     
++#define XtStackFree(pointer, stack_cache_array) \
++    if ((pointer) != ((XtPointer)(stack_cache_array))) XtFree(pointer); else
++
+--- a/xc/lib/Xaw3d/XawI18n.h
++++ b/xc/lib/Xaw3d/XawI18n.h
+@@ -27,6 +27,8 @@
+ 
+ ********************************************************/
+ 
++/* Mod for Debian by Joey Hess, do not include widec.h */
++#if 0
+ #ifdef HAS_WCTYPE_H
+ #include <wctype.h>
+ #include <widec.h>
+@@ -34,6 +36,7 @@
+ #define wcscpy(d,s) wscpy(d,s)
+ #define wcsncpy(d,s,l) wsncpy(d,s,l)
+ #endif
++#endif /* 0 */
+ 
+ #ifdef HAS_WCHAR_H
+ #include <wchar.h>

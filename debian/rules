@@ -1,0 +1,34 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE=1
+
+DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
+
+SOURCE=xc/lib/Xaw3d
+
+%:
+	dh $@ --buildsystem=makefile
+
+override_dh_auto_build:
+	rm -rf $(SOURCE)/X11 && install -m755 -d $(SOURCE)/X11
+	cd $(SOURCE) && ln -sf ../ X11/Xaw3d && xmkmf
+	$(MAKE) -C $(SOURCE) \
+          EXTRA_DEFINES="-D_REENTRANT -DARROW_SCROLLBAR" SHLIBDEF="-D_REENTRANT -DARROW_SCROLLBAR"
+
+override_dh_auto_clean:
+	rm -rf $(SOURCE)/X11 $(COMPAT) lib/Xaw3d/laygram.h
+	cd $(SOURCE) && [ -f $(SOURCE)/Makefile ] || xmkmf
+	$(MAKE) -C $(SOURCE) clean
+	dh_clean `find . -name Makefile`
+
+override_dh_auto_install:
+	$(MAKE) -C $(SOURCE) install \
+        DESTDIR=$(CURDIR)/debian/tmp INCDIR=/usr/include \
+		SHLIBDIR=/usr/lib/$(DEB_HOST_MULTIARCH) \
+		USRLIBDIR=/usr/lib/$(DEB_HOST_MULTIARCH)
+
+override_dh_installexamples:
+	dh_installexamples $(SOURCE)/app-defaults
+
+override_dh_installdocs:
+	dh_installdocs $(SOURCE)/README.XAW3D 
