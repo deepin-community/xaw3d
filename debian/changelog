@@ -1,14 +1,9 @@
-xaw3d (1.5+F-2) UNRELEASED; urgency=medium
-
-  * update
-
- -- Francesco Paolo Lovergine <frankie@debian.org>  Mon, 01 Aug 2022 22:35:43 -0400
-
 xaw3d (1.5+F-2) unstable; urgency=medium
 
-  * rebuild
+  [ Deepin Packages Builder ]
+  * update
 
- -- Francesco Paolo Lovergine <frankie@debian.org>  Thu, 07 Jan 2021 19:57:42 +0100
+ -- Deepin Packages Builder <packages@deepin.org>  Mon, 09 Jan 2023 13:26:15 +0800
 
 xaw3d (1.5+F-1) unstable; urgency=medium
 
